@@ -15,6 +15,9 @@
 #   3. Upgrade EVERY kernel meta-package + image/headers/modules/
 #      modules-extra/tools/cloud-tools siblings to the latest patched
 #      version. This is the actual fix.
+#      With --full-upgrade, runs `apt-get full-upgrade -y` instead — a
+#      full system upgrade that includes the kernel patch plus every
+#      other pending update.
 #   4. Rebuild any DKMS-managed third-party kernel modules (ZFS,
 #      VirtualBox, NVIDIA, etc.) against the new kernel so the host is
 #      fully bootable on the patched ABI.
@@ -27,18 +30,21 @@
 #   9. Report Ubuntu Pro Livepatch status if available.
 #
 # Usage:
-#   sudo ./copyfail-fix.sh              # apply the full fix
-#   sudo ./copyfail-fix.sh --check      # report only, no changes
+#   sudo ./copyfail-fix.sh                 # apply targeted kernel fix
+#   sudo ./copyfail-fix.sh --full-upgrade  # apply full system upgrade
+#   sudo ./copyfail-fix.sh --check         # report only, no changes
 #        ./copyfail-fix.sh --help
 
 set -euo pipefail
 
 CVE="CVE-2026-31431"
 CHECK_ONLY=0
+FULL_UPGRADE=0
 
 for arg in "$@"; do
     case "$arg" in
-        --check) CHECK_ONLY=1 ;;
+        --check)         CHECK_ONLY=1 ;;
+        --full-upgrade)  FULL_UPGRADE=1 ;;
         -h|--help)
             awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$0"
             exit 0 ;;
@@ -230,29 +236,42 @@ fi
 # ---------- apply the fix ----------
 echo
 hr
-info "Applying full fix (kernel upgrade is the priority, kmod is defence-in-depth)"
+if [[ $FULL_UPGRADE -eq 1 ]]; then
+    info "Applying full fix in FULL UPGRADE mode (system-wide apt full-upgrade)"
+else
+    info "Applying full fix in TARGETED mode (kernel-related packages only)"
+fi
 hr
 
 # STEP 1: kernel upgrade — the actual fix
 echo
-info "[1/5] Upgrading all kernel meta-packages and siblings..."
-if [[ ${#KERNEL_PKGS[@]} -gt 0 ]]; then
-    echo "      Targets: ${KERNEL_PKGS[*]}"
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --only-upgrade "${KERNEL_PKGS[@]}" || \
-        warn "Some kernel package upgrades failed; check apt output above."
+if [[ $FULL_UPGRADE -eq 1 ]]; then
+    info "[1/5] Running full system upgrade (apt-get full-upgrade)..."
+    info "      This will upgrade every package with a pending update,"
+    info "      not just kernel-related ones. The kernel patch is included."
+    DEBIAN_FRONTEND=noninteractive apt-get full-upgrade -y || \
+        warn "Full upgrade returned non-zero; check apt output above."
 else
-    warn "No detected kernel metas; falling back to upgrading any upgradable linux-* packages."
-fi
+    info "[1/5] Upgrading all kernel meta-packages and siblings..."
+    if [[ ${#KERNEL_PKGS[@]} -gt 0 ]]; then
+        echo "      Targets: ${KERNEL_PKGS[*]}"
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --only-upgrade "${KERNEL_PKGS[@]}" || \
+            warn "Some kernel package upgrades failed; check apt output above."
+    else
+        warn "No detected kernel metas; falling back to upgrading any upgradable linux-* packages."
+    fi
 
-# Safety net: anything else linux-* still upgradable?
-mapfile -t REMAINING < <(
-    apt list --upgradable 2>/dev/null \
-        | awk -F/ '/^linux-/{print $1}' \
-        | sort -u
-)
-if [[ ${#REMAINING[@]} -gt 0 ]]; then
-    info "      Pulling additional pending linux-* upgrades: ${REMAINING[*]}"
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --only-upgrade "${REMAINING[@]}" || true
+    # Safety net: anything else linux-* still upgradable?
+    mapfile -t REMAINING < <(
+        apt list --upgradable 2>/dev/null \
+            | awk -F/ '/^linux-/{print $1}' \
+            | sort -u
+    )
+    if [[ ${#REMAINING[@]} -gt 0 ]]; then
+        info "      Pulling additional pending linux-* upgrades: ${REMAINING[*]}"
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --only-upgrade "${REMAINING[@]}" || true
+    fi
+    info "      Tip: re-run with --full-upgrade for a system-wide upgrade."
 fi
 
 # STEP 2: rebuild DKMS-managed third-party kernel modules against any newly
