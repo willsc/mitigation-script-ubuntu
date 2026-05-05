@@ -29,27 +29,41 @@ chmod +x copyfail-fix.sh
 # Read-only status check — safe to run any time
 sudo ./copyfail-fix.sh --check
 
-# Apply the full fix
+# Apply the targeted fix (kernel-related packages only — fast, predictable)
 sudo ./copyfail-fix.sh
+
+# Apply the fix as part of a full system upgrade (everything pending)
+sudo ./copyfail-fix.sh --full-upgrade
 
 # Help
 ./copyfail-fix.sh --help
 ```
 
+### Targeted vs. full-upgrade mode
+
+| Mode | What it upgrades | When to use |
+|---|---|---|
+| Default (targeted) | Kernel meta-packages and siblings only (`linux-image-*`, `linux-headers-*`, `linux-modules-*`, `linux-modules-extra-*`, `linux-tools-*`, `linux-cloud-tools-*`, `kmod`) | You want a small, predictable change focused on the CVE. Fast. Lowest risk of unrelated breakage. |
+| `--full-upgrade` | Equivalent to `apt-get update && apt-get full-upgrade -y` — every package with a pending update | You want a comprehensive maintenance pass that catches this CVE plus all other pending security updates. Slower; may pull in unrelated changes. |
+
+Both modes go through the same DKMS rebuild, blacklist, unload, and verification steps. Only step 1 (the upgrade itself) differs.
+
 A typical workflow on a desktop or server:
 
 ```bash
-sudo ./copyfail-fix.sh --check    # see what's missing
-sudo ./copyfail-fix.sh            # apply the fix
-sudo reboot                       # if the script tells you to
-sudo ./copyfail-fix.sh --check    # confirm patched after reboot
+sudo ./copyfail-fix.sh --check              # see what's missing
+sudo ./copyfail-fix.sh                      # apply targeted fix
+# or, for a comprehensive pass:
+sudo ./copyfail-fix.sh --full-upgrade       # apply system-wide upgrade
+sudo reboot                                  # if the script tells you to
+sudo ./copyfail-fix.sh --check              # confirm patched after reboot
 ```
 
 ## What it does (in priority order)
 
 1. **Inventory** every installed Linux kernel meta-package (`linux-image-generic`, `linux-image-generic-hwe-22.04`, `linux-image-oem-22.04`, `linux-image-aws`, etc.).
 2. **`apt-get update`** to refresh the package cache.
-3. **Upgrade** every detected kernel meta plus its installed siblings: `linux-${suffix}`, `linux-headers-${suffix}`, `linux-modules-${suffix}`, `linux-modules-extra-${suffix}`, `linux-tools-${suffix}`, `linux-cloud-tools-${suffix}`. This is the actual fix.
+3. **Upgrade** every detected kernel meta plus its installed siblings: `linux-${suffix}`, `linux-headers-${suffix}`, `linux-modules-${suffix}`, `linux-modules-extra-${suffix}`, `linux-tools-${suffix}`, `linux-cloud-tools-${suffix}`. This is the actual fix. With `--full-upgrade`, this step runs `apt-get full-upgrade -y` instead, upgrading every package with a pending update.
 4. **Rebuild DKMS** third-party modules (ZFS, VirtualBox, NVIDIA, etc.) against the newly installed kernel ABI, surfacing any rebuild failures before reboot.
 5. **Upgrade `kmod`** to pick up Canonical's `/etc/modprobe.d/disable-algif_aead.conf` mitigation drop-in.
 6. **Write `/etc/modprobe.d/cve-2026-31431.conf`** — an explicit blacklist of `algif_aead` and `authencesn`, independent of Canonical's package, with `install … /bin/false` rules that actually block loading (not just `blacklist`, which can be overridden).
