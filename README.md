@@ -1,1 +1,1 @@
-# mitigation-script-ubuntu-
+# mitigation-script-ubuntu
